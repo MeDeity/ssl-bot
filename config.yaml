@@ -43,6 +43,43 @@ certbot:
   # 是否启用 HSTS
   hsts: true
 
+# 域名配置模板
+domain_templates:
+  # 静态网站模板
+  static:
+    webroot: "/var/www/{domain}/html"
+    type: "static"
+    
+  # PHP 网站模板  
+  php:
+    webroot: "/var/www/{domain}/html"
+    type: "php"
+    php_version: "8.1"
+    
+  # 反向代理模板
+  reverse_proxy:
+    type: "reverse_proxy"
+    proxy_pass: "http://127.0.0.1:8080"
+    proxy_settings:
+      proxy_connect_timeout: "60s"
+      proxy_send_timeout: "60s"
+      proxy_read_timeout: "60s"
+      
+  # Tomcat 专用模板
+  tomcat:
+    type: "reverse_proxy"
+    proxy_pass: "http://127.0.0.1:8080"
+    location: "/"  # 可以指定应用路径
+    proxy_settings:
+      proxy_set_header: true
+      websocket_support: true
+      
+# 默认配置
+defaults:
+  template: "static"  # 默认使用静态网站模板
+  auto_ssl: true
+  create_webroot: true
+
 # 日志配置
 logging:
   level: "INFO"

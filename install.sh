@@ -423,7 +423,7 @@ get_user_email() {
 }
 
 get_user_domains() {
-    log "配置域名..."
+    log "配置域名和服务类型..."
     
     # 检查是否在终端中运行
     if [ ! -t 0 ] && [ -z "$SSL_BOT_DOMAINS" ]; then
@@ -442,7 +442,7 @@ get_user_domains() {
     echo ""
     echo "=========================================="
     echo "SSL Bot 域名配置"
-    echo "可以为尚未配置的域名自动创建 Nginx 配置"
+    echo "支持多种服务类型：静态网站、PHP、反向代理"
     echo "=========================================="
     echo ""
     
@@ -457,7 +457,8 @@ get_user_domains() {
         read user_domains < /dev/tty
         
         if [[ ! -z "$user_domains" ]]; then
-            setup_domains $user_domains
+            # 询问服务类型
+            select_service_type "$user_domains"
         else
             log "未输入域名，跳过配置"
         fi
@@ -466,26 +467,478 @@ get_user_domains() {
     fi
 }
 
+select_service_type() {
+    local domains=($1)
+    
+    echo ""
+    echo "请选择服务类型:"
+    echo "1) 静态网站 (HTML/CSS/JS)"
+    echo "2) PHP 网站"
+    echo "3) 反向代理 (Tomcat/Node.js/Python等)"
+    echo "4) Tomcat 应用 (专用配置)"
+    echo -n "请选择 [1-4]: "
+    
+    read service_choice < /dev/tty
+    
+    case $service_choice in
+        1)
+            setup_domains "static" "${domains[@]}"
+            ;;
+        2)
+            setup_domains "php" "${domains[@]}"
+            ;;
+        3)
+            setup_reverse_proxy "${domains[@]}"
+            ;;
+        4)
+            setup_tomcat_proxy "${domains[@]}"
+            ;;
+        *)
+            echo "使用默认配置: 静态网站"
+            setup_domains "static" "${domains[@]}"
+            ;;
+    esac
+}
+
 setup_domains() {
+    local service_type="$1"
+    shift
     local domains=("$@")
     
-    log "开始配置域名: ${domains[*]}"
+    log "开始配置域名 (服务类型: $service_type): ${domains[*]}"
+    
+    # 确保 Nginx 服务状态正常
+    if ! ensure_nginx_service; then
+        error "Nginx 服务状态异常，无法继续配置域名"
+        return 1
+    fi
     
     for domain in "${domains[@]}"; do
         if validate_domain "$domain"; then
-            create_nginx_config "$domain"
-            create_web_directory "$domain"
+            case $service_type in
+                "static")
+                    create_nginx_static_config "$domain"
+                    create_web_directory "$domain"
+                    ;;
+                "php")
+                    create_nginx_php_config "$domain"
+                    create_web_directory "$domain"
+                    ;;
+                *)
+                    create_nginx_static_config "$domain"
+                    create_web_directory "$domain"
+                    ;;
+            esac
         else
             error "域名格式无效: $domain"
         fi
     done
     
-    # 重新加载 Nginx
-    if nginx -t; then
-        systemctl reload nginx
-        log "Nginx 配置重新加载完成"
+    # 重新加载 Nginx 配置
+    if ! reload_nginx_config; then
+        error "Nginx 配置重载失败"
+        return 1
+    fi
+    
+    log "域名配置完成"
+}
+
+setup_reverse_proxy() {
+    local domains=("$@")
+    
+    log "配置反向代理域名: ${domains[*]}"
+    
+    # 获取后端服务信息
+    echo ""
+    echo "请输入后端服务信息:"
+    echo -n "后端服务地址 (例如: http://localhost:8080 或 http://192.168.1.100:3000): "
+    read backend_url < /dev/tty
+    
+    if [[ -z "$backend_url" ]]; then
+        error "后端服务地址不能为空"
+        return 1
+    fi
+    
+    echo -n "应用路径 (可选，默认: /): "
+    read app_path < /dev/tty
+    app_path=${app_path:-"/"}
+    
+    # 确保 Nginx 服务状态正常
+    if ! ensure_nginx_service; then
+        error "Nginx 服务状态异常，无法继续配置域名"
+        return 1
+    fi
+    
+    for domain in "${domains[@]}"; do
+        if validate_domain "$domain"; then
+            create_nginx_proxy_config "$domain" "$backend_url" "$app_path"
+        else
+            error "域名格式无效: $domain"
+        fi
+    done
+    
+    # 重新加载 Nginx 配置
+    if ! reload_nginx_config; then
+        error "Nginx 配置重载失败"
+        return 1
+    fi
+    
+    log "反向代理配置完成"
+}
+
+setup_tomcat_proxy() {
+    local domains=("$@")
+    
+    log "配置 Tomcat 代理域名: ${domains[*]}"
+    
+    # 获取 Tomcat 服务信息
+    echo ""
+    echo "请输入 Tomcat 服务信息:"
+    echo -n "Tomcat 地址 (默认: http://localhost:8080): "
+    read tomcat_url < /dev/tty
+    tomcat_url=${tomcat_url:-"http://localhost:8080"}
+    
+    echo -n "应用路径 (例如: /demo 或 /myapp): "
+    read app_path < /dev/tty
+    app_path=${app_path:-"/"}
+    
+    # 确保 Nginx 服务状态正常
+    if ! ensure_nginx_service; then
+        error "Nginx 服务状态异常，无法继续配置域名"
+        return 1
+    fi
+    
+    for domain in "${domains[@]}"; do
+        if validate_domain "$domain"; then
+            create_nginx_tomcat_config "$domain" "$tomcat_url" "$app_path"
+        else
+            error "域名格式无效: $domain"
+        fi
+    done
+    
+    # 重新加载 Nginx 配置
+    if ! reload_nginx_config; then
+        error "Nginx 配置重载失败"
+        return 1
+    fi
+    
+    log "Tomcat 代理配置完成"
+}
+
+
+create_nginx_static_config() {
+    local domain="$1"
+    local config_file="/etc/nginx/sites-available/$domain"
+    local webroot="/var/www/$domain/html"
+    
+    log "创建静态网站配置: $config_file"
+    
+    cat > "$config_file" << EOF
+server {
+    listen 80;
+    listen [::]:80;
+    
+    server_name $domain;
+    root $webroot;
+    index index.html index.htm;
+    
+    # 安全头
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    
+    # 静态文件缓存
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+    
+    # 隐藏点文件
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+    
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+    
+    enable_nginx_site "$domain" "$config_file"
+}
+
+create_nginx_php_config() {
+    local domain="$1"
+    local config_file="/etc/nginx/sites-available/$domain"
+    local webroot="/var/www/$domain/html"
+    
+    log "创建 PHP 网站配置: $config_file"
+    
+    cat > "$config_file" << EOF
+server {
+    listen 80;
+    listen [::]:80;
+    
+    server_name $domain;
+    root $webroot;
+    index index.php index.html index.htm;
+    
+    # 安全头
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    
+    # PHP 处理
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include fastcgi_params;
+    }
+    
+    # 静态文件缓存
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+    
+    # 隐藏点文件
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+    
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+}
+EOF
+    
+    enable_nginx_site "$domain" "$config_file"
+}
+
+create_nginx_proxy_config() {
+    local domain="$1"
+    local backend_url="$2"
+    local app_path="$3"
+    local config_file="/etc/nginx/sites-available/$domain"
+    
+    log "创建反向代理配置: $domain -> $backend_url$app_path"
+    
+    cat > "$config_file" << EOF
+server {
+    listen 80;
+    listen [::]:80;
+    
+    server_name $domain;
+    
+    # 安全头
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    
+    # 反向代理配置
+    location $app_path {
+        proxy_pass $backend_url;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        
+        # 超时设置
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        
+        # 缓冲区设置
+        proxy_buffering on;
+        proxy_buffer_size 4k;
+        proxy_buffers 8 4k;
+        
+        # WebSocket 支持
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+    
+    # 可选的静态文件服务
+    location /static/ {
+        alias /var/www/$domain/static/;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+    
+    # 根路径重定向到应用
+    location = / {
+        return 302 $app_path;
+    }
+}
+EOF
+    
+    enable_nginx_site "$domain" "$config_file"
+}
+
+create_nginx_tomcat_config() {
+    local domain="$1"
+    local tomcat_url="$2"
+    local app_path="$3"
+    local config_file="/etc/nginx/sites-available/$domain"
+    
+    log "创建 Tomcat 代理配置: $domain -> $tomcat_url$app_path"
+    
+    # 确保 Tomcat URL 以 / 结尾
+    if [[ "$tomcat_url" != */ ]]; then
+        tomcat_url="$tomcat_url/"
+    fi
+    
+    cat > "$config_file" << EOF
+server {
+    listen 80;
+    listen [::]:80;
+    
+    server_name $domain;
+    
+    # 安全头
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    
+    # Tomcat 应用代理
+    location $app_path {
+        proxy_pass $tomcat_url;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        
+        # Tomcat 特定设置
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Server \$host;
+        proxy_set_header X-Forwarded-Port \$server_port;
+        
+        # 超时设置
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        
+        # 缓冲区设置
+        proxy_buffering on;
+        proxy_buffer_size 16k;
+        proxy_buffers 4 16k;
+        
+        # 禁用缓存，确保动态内容实时更新
+        proxy_no_cache 1;
+        proxy_cache_bypass 1;
+    }
+    
+    # 静态资源缓存
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js)$ {
+        proxy_pass $tomcat_url;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+    
+    # 健康检查端点
+    location /health {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
+    }
+}
+EOF
+    
+    enable_nginx_site "$domain" "$config_file"
+}
+
+enable_nginx_site() {
+    local domain="$1"
+    local config_file="$2"
+    
+    # 启用站点
+    if [ ! -f "/etc/nginx/sites-enabled/$domain" ]; then
+        ln -s "$config_file" "/etc/nginx/sites-enabled/$domain"
+        log "Nginx 站点已启用: $domain"
     else
-        error "Nginx 配置测试失败，请检查配置"
+        log "Nginx 站点已存在: $domain"
+    fi
+}
+
+ensure_nginx_service() {
+    log "检查 Nginx 服务状态..."
+    
+    # 检查 Nginx 是否安装
+    if ! command -v nginx >/dev/null 2>&1; then
+        error "Nginx 未安装"
+        return 1
+    fi
+    
+    # 检查 Nginx 服务状态
+    if systemctl is-active nginx >/dev/null 2>&1; then
+        log "Nginx 服务正在运行"
+        return 0
+    else
+        warn "Nginx 服务未运行，尝试启动..."
+        
+        # 首先测试配置文件
+        if ! nginx -t >/dev/null 2>&1; then
+            error "Nginx 配置测试失败，请检查配置"
+            return 1
+        fi
+        
+        # 启动 Nginx 服务
+        if systemctl start nginx; then
+            log "Nginx 服务启动成功"
+            
+            # 启用开机自启
+            if systemctl enable nginx >/dev/null 2>&1; then
+                log "Nginx 服务已设置为开机自启"
+            fi
+            
+            return 0
+        else
+            error "Nginx 服务启动失败"
+            return 1
+        fi
+    fi
+}
+
+reload_nginx_config() {
+    log "重新加载 Nginx 配置..."
+    
+    # 首先测试配置文件语法
+    if ! nginx -t; then
+        error "Nginx 配置测试失败，请检查配置文件"
+        return 1
+    fi
+    
+    # 检查 Nginx 是否正在运行
+    if systemctl is-active nginx >/dev/null 2>&1; then
+        # 如果正在运行，重新加载
+        if systemctl reload nginx; then
+            log "Nginx 配置重新加载成功"
+            return 0
+        else
+            error "Nginx 重新加载失败"
+            return 1
+        fi
+    else
+        # 如果没有运行，启动服务
+        warn "Nginx 服务未运行，尝试启动..."
+        if systemctl start nginx; then
+            log "Nginx 服务启动成功"
+            return 0
+        else
+            error "Nginx 服务启动失败"
+            return 1
+        fi
     fi
 }
 

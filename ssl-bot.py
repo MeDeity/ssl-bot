@@ -321,29 +321,166 @@ class DomainManager:
         self.config = config
         self.nginx_parser = NginxConfigParser()
     
-    def setup_domain(self, domain: str, webroot: str = None) -> bool:
-        """设置新域名"""
+    def setup_domain(self, domain: str, service_type: str = "static", **kwargs) -> bool:
+        """设置新域名，支持多种服务类型"""
         try:
-            if not webroot:
-                webroot = f"/var/www/{domain}/html"
+            logger.info(f"设置域名: {domain} (服务类型: {service_type})")
             
-            logger.info(f"设置域名: {domain} -> {webroot}")
-            
-            # 创建网站目录
-            self.create_web_directory(domain, webroot)
-            
-            # 创建 Nginx 配置
-            if self.create_nginx_config(domain, webroot):
-                # 测试并重载 Nginx
-                if self.reload_nginx():
-                    logger.info(f"域名设置成功: {domain}")
-                    return True
-            
-            return False
-            
+            if service_type == "static":
+                webroot = kwargs.get('webroot', f"/var/www/{domain}/html")
+                return self.create_static_site(domain, webroot)
+                
+            elif service_type == "php":
+                webroot = kwargs.get('webroot', f"/var/www/{domain}/html")
+                php_version = kwargs.get('php_version', '8.1')
+                return self.create_php_site(domain, webroot, php_version)
+                
+            elif service_type == "reverse_proxy":
+                backend_url = kwargs.get('backend_url', 'http://localhost:8080')
+                app_path = kwargs.get('app_path', '/')
+                return self.create_reverse_proxy(domain, backend_url, app_path)
+                
+            elif service_type == "tomcat":
+                tomcat_url = kwargs.get('tomcat_url', 'http://localhost:8080')
+                app_path = kwargs.get('app_path', '/')
+                return self.create_tomcat_proxy(domain, tomcat_url, app_path)
+                
+            else:
+                logger.error(f"不支持的服务类型: {service_type}")
+                return False
+                
         except Exception as e:
             logger.error(f"设置域名失败 {domain}: {e}")
             return False
+    
+    def create_reverse_proxy(self, domain: str, backend_url: str, app_path: str = "/") -> bool:
+        """创建反向代理配置"""
+        try:
+            config_content = f'''
+server {{
+    listen 80;
+    listen [::]:80;
+    
+    server_name {domain};
+    
+    # 安全头
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    
+    # 反向代理配置
+    location {app_path} {{
+        proxy_pass {backend_url};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # 超时设置
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        
+        # WebSocket 支持
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }}
+}}
+'''
+            return self._write_nginx_config(domain, config_content)
+            
+        except Exception as e:
+            logger.error(f"创建反向代理配置失败: {e}")
+            return False
+    
+    def create_tomcat_proxy(self, domain: str, tomcat_url: str, app_path: str = "/") -> bool:
+        """创建 Tomcat 专用代理配置"""
+        try:
+            # 确保 URL 以 / 结尾
+            if not tomcat_url.endswith('/'):
+                tomcat_url += '/'
+                
+            config_content = f'''
+server {{
+    listen 80;
+    listen [::]:80;
+    
+    server_name {domain};
+    
+    # 安全头
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    
+    # Tomcat 应用代理
+    location {app_path} {{
+        proxy_pass {tomcat_url};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Tomcat 特定设置
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Server $host;
+        
+        # 超时设置
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }}
+}}
+'''
+            return self._write_nginx_config(domain, config_content)
+            
+        except Exception as e:
+            logger.error(f"创建 Tomcat 代理配置失败: {e}")
+            return False
+    
+    def _write_nginx_config(self, domain: str, config_content: str) -> bool:
+        """写入 Nginx 配置并启用站点"""
+        try:
+            config_path = f"/etc/nginx/sites-available/{domain}"
+            with open(config_path, 'w') as f:
+                f.write(config_content)
+            
+            # 启用站点
+            enabled_path = f"/etc/nginx/sites-enabled/{domain}"
+            if not os.path.exists(enabled_path):
+                os.symlink(config_path, enabled_path)
+            
+            logger.info(f"Nginx 配置创建成功: {domain}")
+            
+            # 重载 Nginx
+            return self.reload_nginx()
+            
+        except Exception as e:
+            logger.error(f"写入 Nginx 配置失败: {e}")
+            return False
+    # def setup_domain(self, domain: str, webroot: str = None) -> bool:
+    #     """设置新域名"""
+    #     try:
+    #         if not webroot:
+    #             webroot = f"/var/www/{domain}/html"
+            
+    #         logger.info(f"设置域名: {domain} -> {webroot}")
+            
+    #         # 创建网站目录
+    #         self.create_web_directory(domain, webroot)
+            
+    #         # 创建 Nginx 配置
+    #         if self.create_nginx_config(domain, webroot):
+    #             # 测试并重载 Nginx
+    #             if self.reload_nginx():
+    #                 logger.info(f"域名设置成功: {domain}")
+    #                 return True
+            
+    #         return False
+            
+    #     except Exception as e:
+    #         logger.error(f"设置域名失败 {domain}: {e}")
+    #         return False
     
     def create_web_directory(self, domain: str, webroot: str):
         """创建网站目录"""
@@ -458,13 +595,16 @@ server {{
         return domains
     
 def main():
-    parser = argparse.ArgumentParser(description='SSL Bot - 自动 SSL 证书管理')
+    parser = argparse.ArgumentParser(description='SSL Bot - 自动 SSL 证书和域名管理')
     parser.add_argument('--scan-and-apply', action='store_true', help='扫描并应用 SSL')
     parser.add_argument('--renew', action='store_true', help='续签证书')
     parser.add_argument('--status', action='store_true', help='显示状态')
     parser.add_argument('--add-domain', type=str, help='添加新域名')
+    parser.add_argument('--service-type', type=str, choices=['static', 'php', 'proxy', 'tomcat'], 
+                       default='static', help='服务类型')
+    parser.add_argument('--backend-url', type=str, help='后端服务地址（用于代理）')
+    parser.add_argument('--app-path', type=str, default='/', help='应用路径（用于代理）')
     parser.add_argument('--list-domains', action='store_true', help='列出所有域名')
-    parser.add_argument('--webroot', type=str, help='网站根目录路径（与 --add-domain 一起使用）')
     args = parser.parse_args()
     
     bot = SSLBot()
@@ -476,9 +616,13 @@ def main():
     elif args.status:
         bot.status()
     elif args.add_domain:
-        webroot = args.webroot or f"/var/www/{args.add_domain}/html"
         domain_manager = DomainManager(bot.config)
-        if domain_manager.setup_domain(args.add_domain, webroot):
+        if domain_manager.setup_domain(
+            args.add_domain, 
+            args.service_type,
+            backend_url=args.backend_url,
+            app_path=args.app_path
+        ):
             # 自动为新域名申请 SSL
             bot.scan_and_apply()
     elif args.list_domains:
