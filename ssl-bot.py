@@ -48,7 +48,8 @@ class NginxConfigParser:
         main_conf = os.path.join(self.config_path, "nginx.conf")
         if os.path.exists(main_conf):
             configs.append(main_conf)
-            
+        
+        logger.info(f"找到以下 Nginx 配置文件: {configs}")
         return configs
     
     def parse_server_blocks(self, config_file: str) -> List[Dict]:

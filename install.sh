@@ -50,16 +50,61 @@ install_dependencies() {
     if command -v apt-get >/dev/null 2>&1; then
         # Debian/Ubuntu
         apt-get update
-        apt-get install -y python3 python3-pip certbot nginx curl wget
+        apt-get install -y python3 python3-pip nginx curl wget
+         # 安装 certbot 和 nginx 插件
+        apt-get install -y certbot python3-certbot-nginx
+
     elif command -v yum >/dev/null 2>&1; then
         # CentOS/RHEL
         yum install -y python3 python3-pip certbot nginx curl wget
+        # 安装 EPEL 仓库（包含 certbot）
+        yum install -y epel-release
+        yum install -y certbot python3-certbot-nginx
+
     elif command -v dnf >/dev/null 2>&1; then
         # Fedora
-        dnf install -y python3 python3-pip certbot nginx curl wget
+        dnf install -y python3 python3-pip nginx curl wget
+        dnf install -y certbot python3-certbot-nginx
     else
         error "不支持的包管理器"
         exit 1
+    fi
+}
+
+verify_certbot_installation() {
+    log "验证 Certbot 安装..."
+    
+    # 检查 certbot 命令是否存在
+    if ! command -v certbot >/dev/null 2>&1; then
+        error "Certbot 未安装"
+        return 1
+    fi
+    
+    # 检查 nginx 插件
+    if certbot plugins | grep -q nginx; then
+        log "✓ Certbot Nginx 插件已安装"
+        return 0
+    else
+        error "✗ Certbot Nginx 插件未安装"
+        
+        # 尝试修复安装
+        warn "尝试安装 Certbot Nginx 插件..."
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get install -y python3-certbot-nginx
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y python3-certbot-nginx
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y python3-certbot-nginx
+        fi
+        
+        # 再次验证
+        if certbot plugins | grep -q nginx; then
+            log "✓ Certbot Nginx 插件安装成功"
+            return 0
+        else
+            error "✗ Certbot Nginx 插件安装失败"
+            return 1
+        fi
     fi
 }
 
@@ -312,6 +357,11 @@ main() {
     check_root
     detect_os
     install_dependencies
+    # 验证 certbot 安装
+    if ! verify_certbot_installation; then
+        error "Certbot 验证失败，安装中止"
+        exit 1
+    fi
     install_python_deps
     download_ssl_bot
     setup_service
