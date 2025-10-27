@@ -628,7 +628,7 @@ setup_tomcat_proxy() {
 
 create_nginx_static_config() {
     local domain="$1"
-    local config_file="/etc/nginx/sites-available/$domain"
+    local config_file="/etc/nginx/sites-available/$domain.nginx"
     local webroot="/var/www/$domain/html"
     
     log "创建静态网站配置: $config_file"

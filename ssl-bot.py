@@ -56,6 +56,7 @@ class NginxConfigParser:
         
         # 扫描所有配置目录
         for directory in nginx_dirs:
+            logger.info(f"正在扫描 Nginx 配置目录: {directory}")
             if '*' in directory:
                 # 处理通配符路径
                 import glob
@@ -126,20 +127,26 @@ class NginxConfigParser:
             
         except Exception:
             return False
+    
     def parse_server_blocks(self, config_file: str) -> List[Dict]:
         """解析 server 块配置"""
         server_blocks = []
         
         try:
-            with open(config_file, 'r') as f:
+            with open(config_file, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
+            
+            # 移除注释，简化解析
+            content = self._remove_comments(content)
             
             # 使用正则表达式匹配 server 块
             server_pattern = r'server\s*\{([^}]+)\}'
             servers = re.findall(server_pattern, content, re.DOTALL)
             
-            for server_content in servers:
-                server_info = self._parse_server_content(server_content, config_file)
+            logger.debug(f"在文件 {config_file} 中找到 {len(servers)} 个 server 块")
+            
+            for i, server_content in enumerate(servers):
+                server_info = self._parse_server_content(server_content, config_file, i)
                 if server_info:
                     server_blocks.append(server_info)
                     
@@ -147,13 +154,22 @@ class NginxConfigParser:
             logger.error(f"解析配置文件 {config_file} 失败: {e}")
             
         return server_blocks
-    
-    def _parse_server_content(self, content: str, config_file: str) -> Optional[Dict]:
+
+    def _remove_comments(self, content: str) -> str:
+        """移除注释"""
+        # 移除单行注释
+        content = re.sub(r'#.*$', '', content, flags=re.MULTILINE)
+        # 移除多行注释（如果有的话）
+        content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+        return content
+
+    def _parse_server_content(self, content: str, config_file: str, block_index: int) -> Optional[Dict]:
         """解析 server 块内容"""
         try:
             # 提取 server_name
             server_name_match = re.search(r'server_name\s+([^;]+);', content)
             if not server_name_match:
+                logger.debug(f"server 块 {block_index} 没有 server_name，跳过")
                 return None
                 
             server_names = server_name_match.group(1).strip().split()
@@ -161,30 +177,106 @@ class NginxConfigParser:
             # 过滤掉无效域名
             valid_domains = []
             for domain in server_names:
-                if domain not in ['_', 'localhost', 'default_server'] and not domain.startswith('~'):
+                domain = domain.strip()
+                # 跳过默认服务器、正则表达式模式等
+                if (domain not in ['_', 'localhost', 'default_server'] and 
+                    not domain.startswith('~') and
+                    not domain.startswith('*.') and
+                    '.' in domain):  # 基本域名验证
                     valid_domains.append(domain)
             
             if not valid_domains:
+                logger.debug(f"server 块 {block_index} 没有有效域名，跳过")
                 return None
             
             # 提取 root 路径
             root_match = re.search(r'root\s+([^;]+);', content)
-            root_path = root_match.group(1) if root_match else "/var/www/html"
+            root_path = root_match.group(1).strip() if root_match else "/var/www/html"
+            
+            # 清理 root 路径（移除引号等）
+            root_path = root_path.strip('"\'').strip()
             
             # 检查是否已有 SSL 配置
             has_ssl = bool(re.search(r'listen\s+443', content)) or bool(re.search(r'ssl_certificate', content))
             
-            return {
+            # 检查是否监听 80 端口（HTTP）
+            listen_80 = bool(re.search(r'listen\s+80', content)) or bool(re.search(r'listen\s+\[::\]:80', content))
+            
+            server_info = {
                 'config_file': config_file,
                 'server_names': valid_domains,
                 'root_path': root_path,
                 'has_ssl': has_ssl,
-                'content': content
+                'listen_80': listen_80,
+                'content': content[:500]  # 只保存部分内容用于调试
             }
+            
+            logger.debug(f"解析到 server 块: {valid_domains} (SSL: {has_ssl}, HTTP: {listen_80})")
+            return server_info
             
         except Exception as e:
             logger.error(f"解析 server 块失败: {e}")
             return None
+        
+    # def parse_server_blocks(self, config_file: str) -> List[Dict]:
+    #     """解析 server 块配置"""
+    #     server_blocks = []
+        
+    #     try:
+    #         with open(config_file, 'r') as f:
+    #             content = f.read()
+            
+    #         # 使用正则表达式匹配 server 块
+    #         server_pattern = r'server\s*\{([^}]+)\}'
+    #         servers = re.findall(server_pattern, content, re.DOTALL)
+            
+    #         for server_content in servers:
+    #             server_info = self._parse_server_content(server_content, config_file)
+    #             if server_info:
+    #                 server_blocks.append(server_info)
+                    
+    #     except Exception as e:
+    #         logger.error(f"解析配置文件 {config_file} 失败: {e}")
+            
+    #     return server_blocks
+    
+    # def _parse_server_content(self, content: str, config_file: str) -> Optional[Dict]:
+    #     """解析 server 块内容"""
+    #     try:
+    #         # 提取 server_name
+    #         server_name_match = re.search(r'server_name\s+([^;]+);', content)
+    #         if not server_name_match:
+    #             return None
+                
+    #         server_names = server_name_match.group(1).strip().split()
+            
+    #         # 过滤掉无效域名
+    #         valid_domains = []
+    #         for domain in server_names:
+    #             if domain not in ['_', 'localhost', 'default_server'] and not domain.startswith('~'):
+    #                 valid_domains.append(domain)
+            
+    #         if not valid_domains:
+    #             return None
+            
+    #         # 提取 root 路径
+    #         root_match = re.search(r'root\s+([^;]+);', content)
+    #         root_path = root_match.group(1) if root_match else "/var/www/html"
+            
+    #         # 检查是否已有 SSL 配置
+    #         has_ssl = bool(re.search(r'listen\s+443', content)) or bool(re.search(r'ssl_certificate', content))
+            
+    #         return {
+    #             'config_file': config_file,
+    #             'server_names': valid_domains,
+    #             'root_path': root_path,
+    #             'has_ssl': has_ssl,
+    #             'content': content
+    #         }
+            
+    #     except Exception as e:
+    #         logger.error(f"解析 server 块失败: {e}")
+    #         return None
 
 class SSLCertManager:
     """SSL 证书管理器"""
@@ -193,20 +285,95 @@ class SSLCertManager:
         self.config = config
         self.email = config.get('email', 'admin@example.com')
     
+    def scan_and_apply(self):
+        """扫描 Nginx 配置并应用 SSL"""
+        logger.info("开始扫描 Nginx 配置...")
+        
+        config_files = self.nginx_parser.find_nginx_configs()
+        logger.info(f"找到 {len(config_files)} 个配置文件")
+        
+        total_servers = 0
+        ssl_applied = 0
+        
+        for config_file in config_files:
+            logger.debug(f"解析配置文件: {config_file}")
+            server_blocks = self.nginx_parser.parse_server_blocks(config_file)
+            total_servers += len(server_blocks)
+            
+            for server_block in server_blocks:
+                logger.debug(f"检查 server 块: {server_block['server_names']}")
+                if self.ssl_manager.needs_ssl(server_block):
+                    logger.info(f"发现需要 SSL 的配置: {server_block['server_names']}")
+                    
+                    if self.ssl_manager.apply_ssl(server_block):
+                        ssl_applied += 1
+        
+        logger.info(f"扫描完成，共发现 {total_servers} 个 server 块，为 {ssl_applied} 个服务应用了 SSL")
+        return ssl_applied
+
+    # def needs_ssl(self, server_block: Dict) -> bool:
+    #     """检查服务器块是否需要 SSL"""
+    #     # 如果已有 SSL，跳过
+    #     if server_block['has_ssl']:
+    #         return False
+        
+    #     # 检查域名是否在排除列表中
+    #     exclude_domains = self.config.get('exclude_domains', [])
+    #     for domain in server_block['server_names']:
+    #         if any(excluded in domain for excluded in exclude_domains):
+    #             return False
+                
+    #     return True
+    
     def needs_ssl(self, server_block: Dict) -> bool:
         """检查服务器块是否需要 SSL"""
         # 如果已有 SSL，跳过
         if server_block['has_ssl']:
+            logger.debug(f"域名 {server_block['server_names']} 已有 SSL 配置，跳过")
+            return False
+        
+        # 检查是否监听 80 端口（只有 HTTP 服务才需要 SSL）
+        if not server_block.get('listen_80', True):
+            logger.debug(f"域名 {server_block['server_names']} 不监听 80 端口，跳过")
             return False
         
         # 检查域名是否在排除列表中
         exclude_domains = self.config.get('exclude_domains', [])
         for domain in server_block['server_names']:
+            # 检查是否在排除列表中
             if any(excluded in domain for excluded in exclude_domains):
+                logger.info(f"跳过排除域名: {domain}")
+                return False
+            
+            # 额外验证域名
+            if not self._is_valid_public_domain(domain):
+                logger.info(f"跳过无效域名: {domain}")
                 return False
                 
+        logger.info(f"发现需要 SSL 的配置: {server_block['server_names']}")
         return True
-    
+
+    def _is_valid_public_domain(self, domain: str) -> bool:
+        """验证是否是有效的公共域名"""
+        # 硬编码的无效域名
+        invalid_domains = [
+            'localhost', 'localdomain', 'example.com', 'test.com',
+            'invalid.com', 'example.org', 'test.org', 'example.net'
+        ]
+        
+        if domain in invalid_domains:
+            return False
+        
+        # 检查是否是本地网络域名
+        if domain.endswith('.local') or domain.endswith('.home') or domain.endswith('.lan'):
+            return False
+        
+        # 基本域名格式验证
+        import re
+        domain_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$'
+        
+        return bool(re.match(domain_pattern, domain))
+
     def apply_ssl(self, server_block: Dict) -> bool:
         """为服务器块申请 SSL 证书"""
         try:
