@@ -37,21 +37,95 @@ class NginxConfigParser:
         """查找所有 Nginx 配置文件"""
         configs = []
         
-        # 检查 sites-available 和 sites-enabled
-        for directory in [self.sites_available, self.sites_enabled]:
-            if os.path.exists(directory):
-                for file in os.listdir(directory):
-                    if file.endswith('.conf') or not '.' in file:
-                        configs.append(os.path.join(directory, file))
+        # 扫描所有可能的 Nginx 配置目录
+        nginx_dirs = [
+            self.sites_available,
+            self.sites_enabled,
+            "/etc/nginx/conf.d",
+            "/etc/nginx/conf.d/*",
+            "/usr/local/nginx/conf",
+            "/usr/local/etc/nginx"
+        ]
         
-        # 检查 nginx.conf
-        main_conf = os.path.join(self.config_path, "nginx.conf")
-        if os.path.exists(main_conf):
-            configs.append(main_conf)
+        # 添加主配置文件
+        main_configs = [
+            "/etc/nginx/nginx.conf",
+            "/usr/local/nginx/conf/nginx.conf",
+            "/usr/local/etc/nginx/nginx.conf"
+        ]
         
-        logger.info(f"找到以下 Nginx 配置文件: {configs}")
+        # 扫描所有配置目录
+        for directory in nginx_dirs:
+            if '*' in directory:
+                # 处理通配符路径
+                import glob
+                expanded_dirs = glob.glob(directory)
+                for expanded_dir in expanded_dirs:
+                    if os.path.isdir(expanded_dir):
+                        self._scan_config_directory(expanded_dir, configs)
+            elif os.path.exists(directory):
+                if os.path.isdir(directory):
+                    self._scan_config_directory(directory, configs)
+                else:
+                    # 如果是文件，直接添加
+                    configs.append(directory)
+        
+        # 添加主配置文件
+        for main_conf in main_configs:
+            if os.path.exists(main_conf):
+                configs.append(main_conf)
+        
+        # 去重
+        configs = list(set(configs))
+        
+        logger.info(f"找到 {len(configs)} 个 Nginx 配置文件: {configs}")
         return configs
     
+    def _scan_config_directory(self, directory: str, configs: List[str]):
+        """扫描配置目录中的所有配置文件"""
+        try:
+            for file in os.listdir(directory):
+                file_path = os.path.join(directory, file)
+                
+                # 跳过隐藏文件和备份文件
+                if file.startswith('.') or file.endswith('~'):
+                    continue
+                    
+                # 如果是目录，递归扫描（处理嵌套配置）
+                if os.path.isdir(file_path):
+                    self._scan_config_directory(file_path, configs)
+                    continue
+                
+                # 检查文件扩展名或文件内容来判断是否是 Nginx 配置
+                if self._is_nginx_config_file(file_path):
+                    configs.append(file_path)
+                    
+        except PermissionError:
+            logger.warning(f"没有权限访问目录: {directory}")
+        except Exception as e:
+            logger.error(f"扫描目录失败 {directory}: {e}")
+
+    def _is_nginx_config_file(self, file_path: str) -> bool:
+        """判断文件是否是 Nginx 配置文件"""
+        try:
+            # 通过文件扩展名判断
+            valid_extensions = ['.conf', '.nginx', '']
+            file_ext = os.path.splitext(file_path)[1]
+            
+            if file_ext in valid_extensions:
+                # 进一步检查文件内容
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read(1024)  # 只读取前1024字节
+                    
+                    # 检查是否包含 Nginx 配置关键字
+                    nginx_keywords = ['server {', 'location ', 'listen ', 'server_name ']
+                    if any(keyword in content for keyword in nginx_keywords):
+                        return True
+            
+            return False
+            
+        except Exception:
+            return False
     def parse_server_blocks(self, config_file: str) -> List[Dict]:
         """解析 server 块配置"""
         server_blocks = []

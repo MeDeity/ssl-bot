@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # SSL Bot 一键安装脚本
-# 使用方法: wget -qO- https://raw.githubusercontent.com/yourname/ssl-bot/main/install.sh | bash
+# 使用方法: wget -qO- https://raw.githubusercontent.com/MeDeity/ssl-bot/refs/heads/master/install.sh | bash
 
 set -e
 
