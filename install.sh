@@ -229,7 +229,7 @@ download_ssl_bot() {
     log "下载 SSL Bot..."
     
     # GitHub 仓库地址
-    GITHUB_REPO="https://raw.githubusercontent.com/MeDeity/ssl-bot/main"
+    GITHUB_REPO="https://raw.githubusercontent.com/MeDeity/ssl-bot/refs/heads/master"
     
     # 创建安装目录
     INSTALL_DIR="/opt/ssl-bot"
