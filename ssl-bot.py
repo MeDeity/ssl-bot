@@ -313,12 +313,158 @@ class SSLBot:
         if needs_ssl:
             print(f"\n需要 SSL 的域名: {', '.join(set(needs_ssl))}")
 
+
+class DomainManager:
+    """域名管理器"""
+    
+    def __init__(self, config: Dict):
+        self.config = config
+        self.nginx_parser = NginxConfigParser()
+    
+    def setup_domain(self, domain: str, webroot: str = None) -> bool:
+        """设置新域名"""
+        try:
+            if not webroot:
+                webroot = f"/var/www/{domain}/html"
+            
+            logger.info(f"设置域名: {domain} -> {webroot}")
+            
+            # 创建网站目录
+            self.create_web_directory(domain, webroot)
+            
+            # 创建 Nginx 配置
+            if self.create_nginx_config(domain, webroot):
+                # 测试并重载 Nginx
+                if self.reload_nginx():
+                    logger.info(f"域名设置成功: {domain}")
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"设置域名失败 {domain}: {e}")
+            return False
+    
+    def create_web_directory(self, domain: str, webroot: str):
+        """创建网站目录"""
+        os.makedirs(webroot, exist_ok=True)
+        
+        # 创建默认页面
+        index_file = os.path.join(webroot, "index.html")
+        with open(index_file, 'w') as f:
+            f.write(f'''<!DOCTYPE html>
+<html>
+<head>
+    <title>欢迎来到 {domain}</title>
+    <meta charset="utf-8">
+</head>
+<body>
+    <h1>欢迎访问 {domain}</h1>
+    <p>此站点由 SSL Bot 自动配置</p>
+    <p>SSL 证书将自动申请和安装</p>
+</body>
+</html>''')
+        
+        # 设置权限
+        subprocess.run(["chown", "-R", "www-data:www-data", os.path.dirname(webroot)], check=True)
+        subprocess.run(["chmod", "-R", "755", os.path.dirname(webroot)], check=True)
+        
+        logger.info(f"创建网站目录: {webroot}")
+    
+    def create_nginx_config(self, domain: str, webroot: str) -> bool:
+        """创建 Nginx 配置"""
+        try:
+            config_content = f'''
+server {{
+    listen 80;
+    listen [::]:80;
+    server_name {domain};
+    root {webroot};
+    index index.html index.htm;
+    
+    # 安全头
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    
+    location / {{
+        try_files $uri $uri/ =404;
+    }}
+    
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js)$ {{
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }}
+    
+    location ~ /\\. {{
+        deny all;
+    }}
+}}
+'''
+            # 写入配置文件
+            config_path = f"/etc/nginx/sites-available/{domain}"
+            with open(config_path, 'w') as f:
+                f.write(config_content)
+            
+            # 启用站点
+            enabled_path = f"/etc/nginx/sites-enabled/{domain}"
+            if not os.path.exists(enabled_path):
+                os.symlink(config_path, enabled_path)
+            
+            logger.info(f"Nginx 配置创建成功: {domain}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"创建 Nginx 配置失败: {e}")
+            return False
+    
+    def reload_nginx(self) -> bool:
+        """重载 Nginx 配置"""
+        try:
+            # 测试配置
+            subprocess.run(["nginx", "-t"], check=True, capture_output=True)
+            # 重载
+            subprocess.run(["systemctl", "reload", "nginx"], check=True)
+            logger.info("Nginx 重载成功")
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Nginx 重载失败: {e}")
+            return False
+    
+    def list_domains(self) -> List[Dict]:
+        """列出所有已配置的域名"""
+        domains = []
+        sites_available = "/etc/nginx/sites-available"
+        
+        if os.path.exists(sites_available):
+            for file in os.listdir(sites_available):
+                if file not in ['default', '000-default']:
+                    config_file = os.path.join(sites_available, file)
+                    with open(config_file, 'r') as f:
+                        content = f.read()
+                        # 提取 server_name
+                        import re
+                        match = re.search(r'server_name\s+([^;]+);', content)
+                        if match:
+                            server_names = match.group(1).strip().split()
+                            for name in server_names:
+                                if name not in ['_', 'localhost'] and not name.startswith('~'):
+                                    domains.append({
+                                        'domain': name,
+                                        'config_file': config_file,
+                                        'enabled': os.path.exists(f"/etc/nginx/sites-enabled/{file}")
+                                    })
+        
+        return domains
+    
 def main():
     parser = argparse.ArgumentParser(description='SSL Bot - 自动 SSL 证书管理')
     parser.add_argument('--scan-and-apply', action='store_true', help='扫描并应用 SSL')
     parser.add_argument('--renew', action='store_true', help='续签证书')
     parser.add_argument('--status', action='store_true', help='显示状态')
-    
+    parser.add_argument('--add-domain', type=str, help='添加新域名')
+    parser.add_argument('--list-domains', action='store_true', help='列出所有域名')
+    parser.add_argument('--webroot', type=str, help='网站根目录路径（与 --add-domain 一起使用）')
     args = parser.parse_args()
     
     bot = SSLBot()
@@ -329,6 +475,19 @@ def main():
         bot.renew()
     elif args.status:
         bot.status()
+    elif args.add_domain:
+        webroot = args.webroot or f"/var/www/{args.add_domain}/html"
+        domain_manager = DomainManager(bot.config)
+        if domain_manager.setup_domain(args.add_domain, webroot):
+            # 自动为新域名申请 SSL
+            bot.scan_and_apply()
+    elif args.list_domains:
+        domain_manager = DomainManager(bot.config)
+        domains = domain_manager.list_domains()
+        print("已配置的域名:")
+        for domain_info in domains:
+            status = "已启用" if domain_info['enabled'] else "未启用"
+            print(f"  - {domain_info['domain']} ({status})")
     else:
         parser.print_help()
 

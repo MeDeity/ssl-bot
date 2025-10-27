@@ -416,6 +416,205 @@ get_user_email() {
     done
 }
 
+get_user_domains() {
+    log "配置域名..."
+    
+    # 检查是否在终端中运行
+    if [ ! -t 0 ] && [ -z "$SSL_BOT_DOMAINS" ]; then
+        warn "检测到非交互式终端，跳过域名配置"
+        return 0
+    fi
+    
+    # 检查环境变量
+    if [ ! -z "$SSL_BOT_DOMAINS" ]; then
+        log "使用环境变量中的域名: $SSL_BOT_DOMAINS"
+        IFS=',' read -ra DOMAIN_ARRAY <<< "$SSL_BOT_DOMAINS"
+        setup_domains "${DOMAIN_ARRAY[@]}"
+        return 0
+    fi
+    
+    echo ""
+    echo "=========================================="
+    echo "SSL Bot 域名配置"
+    echo "可以为尚未配置的域名自动创建 Nginx 配置"
+    echo "=========================================="
+    echo ""
+    
+    echo -n "是否要配置新域名？(y/N): "
+    read response < /dev/tty
+    
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+        echo ""
+        echo "请输入要配置的域名（多个域名用空格分隔）:"
+        echo "例如: example.com www.example.com"
+        echo -n "域名: "
+        read user_domains < /dev/tty
+        
+        if [[ ! -z "$user_domains" ]]; then
+            setup_domains $user_domains
+        else
+            log "未输入域名，跳过配置"
+        fi
+    else
+        log "跳过域名配置"
+    fi
+}
+
+setup_domains() {
+    local domains=("$@")
+    
+    log "开始配置域名: ${domains[*]}"
+    
+    for domain in "${domains[@]}"; do
+        if validate_domain "$domain"; then
+            create_nginx_config "$domain"
+            create_web_directory "$domain"
+        else
+            error "域名格式无效: $domain"
+        fi
+    done
+    
+    # 重新加载 Nginx
+    if nginx -t; then
+        systemctl reload nginx
+        log "Nginx 配置重新加载完成"
+    else
+        error "Nginx 配置测试失败，请检查配置"
+    fi
+}
+
+validate_domain() {
+    local domain="$1"
+    
+    # 基本域名格式验证
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+        return 1
+    fi
+    
+    # 检查是否在排除列表中
+    local exclude_patterns=("localhost" "example.com" "test." "internal.")
+    for pattern in "${exclude_patterns[@]}"; do
+        if [[ "$domain" == *"$pattern"* ]]; then
+            return 1
+        fi
+    done
+    
+    return 0
+}
+
+create_web_directory() {
+    local domain="$1"
+    local webroot="/var/www/$domain/html"
+    
+    log "创建网站目录: $webroot"
+    
+    mkdir -p "$webroot"
+    
+    # 创建默认首页
+    cat > "$webroot/index.html" << EOF
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>欢迎来到 $domain</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            max-width: 800px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            text-align: center;
+        }
+        .container { 
+            margin-top: 50px; 
+        }
+        .success { 
+            color: #28a745; 
+            font-size: 24px; 
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="success">✓ 网站配置成功</div>
+        <h1>欢迎访问 $domain</h1>
+        <p>此网站由 SSL Bot 自动配置</p>
+        <p>接下来将自动配置 SSL 证书...</p>
+    </div>
+</body>
+</html>
+EOF
+    
+    # 设置目录权限
+    chown -R www-data:www-data "/var/www/$domain"
+    chmod -R 755 "/var/www/$domain"
+    
+    log "网站目录创建完成: $webroot"
+}
+
+create_nginx_config() {
+    local domain="$1"
+    local config_file="/etc/nginx/sites-available/$domain"
+    
+    log "创建 Nginx 配置: $config_file"
+    
+    # 创建 Nginx 配置
+    cat > "$config_file" << EOF
+server {
+    listen 80;
+    listen [::]:80;
+    
+    server_name $domain;
+    root /var/www/$domain/html;
+    index index.html index.htm;
+    
+    # 安全头
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    
+    # 静态文件缓存
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+    
+    # 隐藏 .htaccess 等文件
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+    
+    # 基础安全设置
+    location = /favicon.ico {
+        log_not_found off;
+        access_log off;
+    }
+    
+    location = /robots.txt {
+        log_not_found off;
+        access_log off;
+    }
+    
+    # 主位置块
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+    
+    # 启用站点
+    if [ ! -f "/etc/nginx/sites-enabled/$domain" ]; then
+        ln -s "$config_file" "/etc/nginx/sites-enabled/$domain"
+        log "Nginx 站点已启用: $domain"
+    fi
+    
+    log "Nginx 配置创建完成: $domain"
+}
+
 # 主函数
 main() {
     log "开始安装 SSL Bot..."
@@ -430,6 +629,7 @@ main() {
     install_python_deps
     download_ssl_bot
     get_user_email
+    get_user_domains
     setup_service
     initial_scan
     show_usage

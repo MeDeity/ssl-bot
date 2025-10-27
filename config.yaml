@@ -3,6 +3,20 @@
 # 管理员邮箱（用于证书到期通知）
 email: "your-email@example.com"
 
+# 自动配置域名设置
+domains:
+  # 默认网站根目录
+  default_webroot: "/var/www/html"
+  
+  # 默认 Nginx 配置模板
+  nginx_template: "default"
+  
+  # 自动创建目录
+  auto_create_dirs: true
+  
+  # 默认索引文件
+  default_index: "index.html"
+
 # 排除的域名（包含这些关键词的域名将跳过 SSL 申请）
 exclude_domains:
   - "localhost"
