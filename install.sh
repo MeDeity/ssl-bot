@@ -247,9 +247,9 @@ download_ssl_bot() {
         fi
         
         if [ -f "$INSTALL_DIR/$file" ]; then
-            log "下载成功: $file"
+            log "下载成功: $GITHUB_REPO/$file"
         else
-            error "下载失败: $file"
+            error "下载失败: $GITHUB_REPO/$file"
             exit 1
         fi
     done
