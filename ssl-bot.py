@@ -374,7 +374,7 @@ class DomainManager:
     def create_nginx_config(self, domain: str, webroot: str) -> bool:
         """创建 Nginx 配置"""
         try:
-            config_content = f'''
+            config_content = fr'''
 server {{
     listen 80;
     listen [::]:80;
