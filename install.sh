@@ -354,45 +354,33 @@ show_usage() {
 get_user_email() {
     log "配置管理员邮箱..."
     
-    # 调试信息：显示当前目录和文件
-    log "当前工作目录: $(pwd)"
-    log "配置文件路径: /opt/ssl-bot/config.yaml"
-    
-    # 检查配置文件是否存在
-    if [ ! -f "/opt/ssl-bot/config.yaml" ]; then
-        error "配置文件不存在: /opt/ssl-bot/config.yaml"
-        error "请检查文件是否下载成功"
-        return 1
-    fi
-    
-    # 显示配置文件内容（前10行）
-    log "配置文件内容（前10行）:"
-    head -10 /opt/ssl-bot/config.yaml
-    
     # 读取当前配置中的邮箱
     CURRENT_EMAIL=$(grep -E '^email:' /opt/ssl-bot/config.yaml | cut -d ' ' -f 2 | tr -d '"' | tr -d "'" | tr -d ' ')
     
-    log "从配置文件中读取的邮箱: '$CURRENT_EMAIL'"
+    log "当前读取到的邮箱: '$CURRENT_EMAIL'"
     
-    # 定义示例邮箱列表
-    local example_emails=("your-email@example.com" "admin@example.com" "user@example.com" "test@example.com")
-    
-    # 检查是否是示例邮箱
-    local is_example_email=0
-    for example_email in "${example_emails[@]}"; do
-        if [[ "$CURRENT_EMAIL" == "$example_email" ]]; then
-            is_example_email=1
-            break
-        fi
-    done
-    
-    # 如果已经是真实邮箱，跳过
-    if [[ $is_example_email -eq 0 ]] && [[ ! -z "$CURRENT_EMAIL" ]]; then
-        log "当前邮箱配置已经是真实邮箱: $CURRENT_EMAIL，跳过输入"
+    # 首先检查环境变量
+    if [ ! -z "$SSL_BOT_EMAIL" ]; then
+        log "使用环境变量中的邮箱: $SSL_BOT_EMAIL"
+        sed -i "s/email:.*/email: \"$SSL_BOT_EMAIL\"/" /opt/ssl-bot/config.yaml
         return 0
     fi
     
-    log "检测到示例邮箱，需要用户输入真实邮箱"
+    # 如果已经是真实邮箱，跳过
+    if [[ "$CURRENT_EMAIL" != "your-email@example.com" ]] && [[ "$CURRENT_EMAIL" != "admin@example.com" ]] && [[ ! -z "$CURRENT_EMAIL" ]]; then
+        log "当前邮箱配置已经是真实邮箱: $CURRENT_EMAIL"
+        return 0
+    fi
+    
+    # 检查是否在终端中运行
+    if [ ! -t 0 ]; then
+        error "检测到非交互式终端，且未设置 SSL_BOT_EMAIL 环境变量"
+        error "请使用以下方式之一设置邮箱:"
+        error "1. 设置环境变量: export SSL_BOT_EMAIL='your-email@example.com'"
+        error "2. 手动修改配置文件: nano /opt/ssl-bot/config.yaml"
+        error "3. 重新运行: bash install.sh (不要使用管道)"
+        return 1
+    fi
     
     # 提示用户输入邮箱
     echo ""
@@ -404,10 +392,7 @@ get_user_email() {
     
     while true; do
         echo -n "请输入您的邮箱地址: "
-        read USER_EMAIL
-        
-        # 去除前后空格
-        USER_EMAIL=$(echo "$USER_EMAIL" | tr -d ' ')
+        read USER_EMAIL < /dev/tty
         
         # 如果用户直接回车，重新提示
         if [[ -z "$USER_EMAIL" ]]; then
@@ -417,41 +402,16 @@ get_user_email() {
         
         # 简单的邮箱格式验证
         if [[ "$USER_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
-            # 检查是否还是示例邮箱
-            local still_example=0
-            for example_email in "${example_emails[@]}"; do
-                if [[ "$USER_EMAIL" == "$example_email" ]]; then
-                    still_example=1
-                    break
-                fi
-            done
-            
-            if [[ $still_example -eq 1 ]]; then
-                error "请勿使用示例邮箱，请输入真实的邮箱地址"
-                continue
-            fi
-            
             # 更新配置文件
-            log "正在更新配置文件..."
             if sed -i "s/email:.*/email: \"$USER_EMAIL\"/" /opt/ssl-bot/config.yaml; then
-                log "✓ 邮箱地址已更新为: $USER_EMAIL"
-                
-                # 验证更新是否成功
-                local updated_email=$(grep -E '^email:' /opt/ssl-bot/config.yaml | cut -d ' ' -f 2 | tr -d '"' | tr -d "'" | tr -d ' ')
-                if [[ "$updated_email" == "$USER_EMAIL" ]]; then
-                    log "✓ 邮箱更新验证成功"
-                    break
-                else
-                    error "邮箱更新验证失败，请手动检查配置文件"
-                    return 1
-                fi
+                log "邮箱地址已更新为: $USER_EMAIL"
+                break
             else
                 error "更新配置文件失败"
                 return 1
             fi
         else
             error "邮箱格式不正确，请重新输入"
-            echo "正确格式示例: username@gmail.com"
         fi
     done
 }
