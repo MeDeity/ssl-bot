@@ -351,6 +351,45 @@ show_usage() {
     echo "日志文件: /var/log/ssl-bot.log"
 }
 
+get_user_email() {
+    log "配置管理员邮箱..."
+    
+    # 读取当前配置中的邮箱
+    CURRENT_EMAIL=$(grep -E '^email:' /opt/ssl-bot/config.yaml | cut -d ' ' -f 2 | tr -d '"' | tr -d "'")
+    
+    # 如果已经是真实邮箱，跳过
+    if [[ "$CURRENT_EMAIL" != "your-email@example.com" ]] && [[ "$CURRENT_EMAIL" != "admin@example.com" ]]; then
+        log "当前邮箱配置: $CURRENT_EMAIL"
+        return 0
+    fi
+    
+    # 提示用户输入邮箱
+    echo ""
+    echo "=========================================="
+    echo "SSL Bot 需要配置真实邮箱地址"
+    echo "用于接收证书到期通知和 Let's Encrypt 注册"
+    echo "=========================================="
+    
+    while true; do
+        read -p "请输入您的邮箱地址: " USER_EMAIL
+        
+        if [[ -z "$USER_EMAIL" ]]; then
+            error "邮箱地址不能为空"
+            continue
+        fi
+        
+        # 简单的邮箱格式验证
+        if [[ "$USER_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+            # 更新配置文件
+            sed -i "s/email:.*/email: \"$USER_EMAIL\"/" /opt/ssl-bot/config.yaml
+            log "邮箱地址已更新为: $USER_EMAIL"
+            break
+        else
+            error "邮箱格式不正确，请重新输入"
+        fi
+    done
+}
+
 # 主函数
 main() {
     log "开始安装 SSL Bot..."
@@ -364,6 +403,7 @@ main() {
     fi
     install_python_deps
     download_ssl_bot
+    get_user_email
     setup_service
     initial_scan
     show_usage

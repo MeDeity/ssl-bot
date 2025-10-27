@@ -10,6 +10,7 @@ exclude_domains:
   - "staging."
   - "dev."
   - "internal."
+  - "example."
 
 # 自动续签
 auto_renew: true
