@@ -1,0 +1,34 @@
+# SSL Bot 配置
+
+# 管理员邮箱（用于证书到期通知）
+email: "your-email@example.com"
+
+# 排除的域名（包含这些关键词的域名将跳过 SSL 申请）
+exclude_domains:
+  - "localhost"
+  - "test."
+  - "staging."
+  - "dev."
+  - "internal."
+
+# 自动续签
+auto_renew: true
+
+# 扫描间隔（秒）
+scan_interval: 86400
+
+# Certbot 配置
+certbot:
+  # 使用测试环境（避免速率限制，生产环境请设为 false）
+  test_cert: false
+  # RSA 密钥大小
+  rsa_key_size: 2048
+  # 是否自动重定向 HTTP 到 HTTPS
+  redirect_http: true
+  # 是否启用 HSTS
+  hsts: true
+
+# 日志配置
+logging:
+  level: "INFO"
+  file: "/var/log/ssl-bot.log"
