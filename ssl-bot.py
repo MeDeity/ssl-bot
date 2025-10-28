@@ -56,7 +56,7 @@ class NginxConfigParser:
         
         # 扫描所有配置目录
         for directory in nginx_dirs:
-            logger.info(f"正在扫描 Nginx 配置目录: {directory}")
+            # logger.info(f"正在扫描 Nginx 配置目录: {directory}")
             if '*' in directory:
                 # 处理通配符路径
                 import glob
@@ -186,7 +186,7 @@ class NginxConfigParser:
                     valid_domains.append(domain)
             
             if not valid_domains:
-                logger.debug(f"server 块 {block_index} 没有有效域名，跳过")
+                logger.warning(f"server 块 {block_index} 没有有效域名，跳过")
                 return None
             
             # 提取 root 路径
@@ -211,7 +211,7 @@ class NginxConfigParser:
                 'content': content[:500]  # 只保存部分内容用于调试
             }
             
-            logger.debug(f"解析到 server 块: {valid_domains} (SSL: {has_ssl}, HTTP: {listen_80})")
+            logger.info(f"解析到 server 块: {valid_domains} (SSL: {has_ssl}, HTTP: {listen_80})")
             return server_info
             
         except Exception as e:
@@ -290,7 +290,6 @@ class SSLCertManager:
         logger.info("开始扫描 Nginx 配置...")
         
         config_files = self.nginx_parser.find_nginx_configs()
-        logger.info(f"找到 {len(config_files)} 个配置文件")
         
         total_servers = 0
         ssl_applied = 0
