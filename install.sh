@@ -1247,6 +1247,62 @@ EOF
     log "Nginx 配置创建完成: $domain"
 }
 
+
+# 兼容性更好的命令安装
+setup_universal_command() {
+    log "设置通用命令访问..."
+    
+    local install_dir="/opt/ssl-bot"
+    local script_path="$install_dir/ssl-bot.py"
+    
+    # 确保脚本可执行
+    chmod +x "$script_path"
+    
+    # 方法1: 尝试创建 /usr/local/bin 符号链接
+    if [ -d "/usr/local/bin" ]; then
+        ln -sf "$script_path" "/usr/local/bin/ssl-bot" 2>/dev/null && \
+        log "命令链接创建成功: /usr/local/bin/ssl-bot"
+    fi
+    
+    # 方法2: 尝试创建 /usr/bin 符号链接（需要root）
+    if [ -d "/usr/bin" ]; then
+        ln -sf "$script_path" "/usr/bin/ssl-bot" 2>/dev/null && \
+        log "命令链接创建成功: /usr/bin/ssl-bot"
+    fi
+    
+    # 方法3: 创建 ~/.local/bin 链接（用户目录）
+    if [ -d "/root" ]; then
+        local user_bin_dir="/root/.local/bin"
+        mkdir -p "$user_bin_dir"
+        ln -sf "$script_path" "$user_bin_dir/ssl-bot" 2>/dev/null && \
+        log "用户命令链接创建成功: $user_bin_dir/ssl-bot"
+        
+        # 添加到 root 用户的 PATH（如果不存在）
+        if ! grep -q ".local/bin" /root/.bashrc 2>/dev/null; then
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> /root/.bashrc
+        fi
+    fi
+    
+    # 验证命令是否可用
+    if command -v ssl-bot >/dev/null 2>&1 || \
+       [ -f "/usr/local/bin/ssl-bot" ] || \
+       [ -f "/usr/bin/ssl-bot" ] || \
+       [ -f "/root/.local/bin/ssl-bot" ]; then
+        log "全局命令设置完成"
+        echo ""
+        echo "现在可以使用以下命令:"
+        echo "  ssl-bot --scan-and-apply    # 扫描并应用 SSL"
+        echo "  ssl-bot --renew             # 续签证书"
+        echo "  ssl-bot --status            # 查看状态"
+        echo "  ssl-bot --add-domain example.com  # 添加新域名"
+        echo ""
+        return 0
+    else
+        warn "无法创建全局命令链接，您仍然可以使用: /opt/ssl-bot/ssl-bot.py"
+        return 1
+    fi
+}
+
 # 主函数
 main() {
     log "开始安装 SSL Bot..."
@@ -1263,6 +1319,7 @@ main() {
     get_user_email
     get_user_domains
     setup_service
+    setup_universal_command
     initial_scan
     show_usage
     log "安装完成！"

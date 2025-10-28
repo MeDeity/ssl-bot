@@ -186,7 +186,7 @@ class NginxConfigParser:
                     valid_domains.append(domain)
             
             if not valid_domains:
-                logger.warning(f"server 块 {block_index} 没有有效域名，跳过")
+                logger.debug(f"server 块 {block_index} 没有有效域名，跳过")
                 return None
             
             # 提取 root 路径
