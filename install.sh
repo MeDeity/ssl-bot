@@ -280,8 +280,36 @@ download_ssl_bot() {
     INSTALL_DIR="/opt/ssl-bot"
     mkdir -p $INSTALL_DIR
     
+    # 检查所有文件是否都已存在
+    all_files_exist=true
+    for file in ssl-bot.py nginx-utils.sh config.yaml; do
+        if [ ! -f "$INSTALL_DIR/$file" ]; then
+            all_files_exist=false
+            break
+        fi
+    done
+
+    local force_download=false
+    if [ "$1" = "--force" ] || [ "$1" = "-f" ]; then
+        force_download=true
+        log "强制下载模式"
+    fi
+    
+    # 如果所有文件都已存在，则跳过下载
+    if [ "$all_files_exist" = true ]; then
+        log "SSL Bot 文件已存在，跳过下载"
+        return 0
+    fi
+    
     # 下载核心文件
     for file in ssl-bot.py nginx-utils.sh config.yaml; do
+        # 如果文件已存在，跳过下载
+        if [ -f "$INSTALL_DIR/$file" ]; then
+            log "文件已存在，跳过: $file"
+            continue
+        fi
+        
+        log "下载: $file"
         if command -v curl >/dev/null 2>&1; then
             curl -sSL "$GITHUB_REPO/$file" -o "$INSTALL_DIR/$file"
         elif command -v wget >/dev/null 2>&1; then
@@ -292,9 +320,9 @@ download_ssl_bot() {
         fi
         
         if [ -f "$INSTALL_DIR/$file" ]; then
-            log "下载成功: $GITHUB_REPO/$file"
+            log "下载成功: $file"
         else
-            error "下载失败: $GITHUB_REPO/$file"
+            error "下载失败: $file"
             exit 1
         fi
     done
@@ -550,7 +578,7 @@ setup_reverse_proxy() {
     
     # 获取后端服务信息
     echo ""
-    echo "请输入后端服务信息:"
+    echo "请输入后端服务信息(请勿以斜杠结尾):"
     echo -n "后端服务地址 (例如: http://localhost:8080 或 http://192.168.1.100:3000): "
     read backend_url < /dev/tty
     
@@ -586,6 +614,45 @@ setup_reverse_proxy() {
     log "反向代理配置完成"
 }
 
+# setup_tomcat_proxy() {
+#     local domains=("$@")
+    
+#     log "配置 Tomcat 代理域名: ${domains[*]}"
+    
+#     # 获取 Tomcat 服务信息
+#     echo ""
+#     echo "请输入 Tomcat 服务信息:"
+#     echo -n "Tomcat 地址 (默认: http://localhost:8080): "
+#     read tomcat_url < /dev/tty
+#     tomcat_url=${tomcat_url:-"http://localhost:8080"}
+    
+#     echo -n "应用路径 (例如: /demo 或 /myapp): "
+#     read app_path < /dev/tty
+#     app_path=${app_path:-"/"}
+    
+#     # 确保 Nginx 服务状态正常
+#     if ! ensure_nginx_service; then
+#         error "Nginx 服务状态异常，无法继续配置域名"
+#         return 1
+#     fi
+    
+#     for domain in "${domains[@]}"; do
+#         if validate_domain "$domain"; then
+#             create_nginx_tomcat_config "$domain" "$tomcat_url" "$app_path"
+#         else
+#             error "域名格式无效: $domain"
+#         fi
+#     done
+    
+#     # 重新加载 Nginx 配置
+#     if ! reload_nginx_config; then
+#         error "Nginx 配置重载失败"
+#         return 1
+#     fi
+    
+#     log "Tomcat 代理配置完成"
+# }
+
 setup_tomcat_proxy() {
     local domains=("$@")
     
@@ -594,13 +661,22 @@ setup_tomcat_proxy() {
     # 获取 Tomcat 服务信息
     echo ""
     echo "请输入 Tomcat 服务信息:"
-    echo -n "Tomcat 地址 (默认: http://localhost:8080): "
+    echo -n "Tomcat 地址 (例如: http://localhost:8080): "
     read tomcat_url < /dev/tty
-    tomcat_url=${tomcat_url:-"http://localhost:8080"}
     
-    echo -n "应用路径 (例如: /demo 或 /myapp): "
+    if [[ -z "$tomcat_url" ]]; then
+        tomcat_url="http://localhost:8080"
+    fi
+    
+    echo -n "应用路径 (例如: /demo 或 /myapp, 默认: /): "
     read app_path < /dev/tty
     app_path=${app_path:-"/"}
+    
+    # 验证输入
+    if ! validate_backend_url "$tomcat_url"; then
+        error "后端地址格式无效: $tomcat_url"
+        return 1
+    fi
     
     # 确保 Nginx 服务状态正常
     if ! ensure_nginx_service; then
@@ -610,7 +686,7 @@ setup_tomcat_proxy() {
     
     for domain in "${domains[@]}"; do
         if validate_domain "$domain"; then
-            create_nginx_tomcat_config "$domain" "$tomcat_url" "$app_path"
+            create_nginx_reverse_proxy_config "$domain" "$tomcat_url" "$app_path"
         else
             error "域名格式无效: $domain"
         fi
@@ -623,6 +699,18 @@ setup_tomcat_proxy() {
     fi
     
     log "Tomcat 代理配置完成"
+    log "访问地址: http://${domains[0]}$app_path"
+}
+
+validate_backend_url() {
+    local url="$1"
+    
+    # 基本 URL 格式验证
+    if [[ "$url" =~ ^https?://[a-zA-Z0-9.-]+(:[0-9]+)?(/.*)?$ ]]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 
@@ -781,17 +869,22 @@ EOF
     enable_nginx_site "$domain" "$config_file"
 }
 
-create_nginx_tomcat_config() {
+create_nginx_reverse_proxy_config() {
     local domain="$1"
-    local tomcat_url="$2"
+    local backend_url="$2"
     local app_path="$3"
     local config_file="/etc/nginx/sites-available/$domain"
     
-    log "创建 Tomcat 代理配置: $domain -> $tomcat_url$app_path"
+    log "创建反向代理配置: $domain -> $backend_url (路径: $app_path)"
     
-    # 确保 Tomcat URL 以 / 结尾
-    if [[ "$tomcat_url" != */ ]]; then
-        tomcat_url="$tomcat_url/"
+    # 清理路径
+    if [[ "$app_path" != /* ]]; then
+        app_path="/$app_path"
+    fi
+    
+    # 确保 backend_url 不以 / 结尾（除非是根路径）
+    if [[ "$backend_url" == */ ]] && [[ "$backend_url" != "http:"*"/" ]] && [[ "$backend_url" != "https:"*"/" ]]; then
+        backend_url="${backend_url%/}"
     fi
     
     cat > "$config_file" << EOF
@@ -806,18 +899,14 @@ server {
     add_header X-XSS-Protection "1; mode=block" always;
     add_header X-Content-Type-Options "nosniff" always;
     
-    # Tomcat 应用代理
+    # 主代理配置
     location $app_path {
-        proxy_pass $tomcat_url;
+        proxy_pass $backend_url;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        
-        # Tomcat 特定设置
         proxy_set_header X-Forwarded-Host \$host;
-        proxy_set_header X-Forwarded-Server \$host;
-        proxy_set_header X-Forwarded-Port \$server_port;
         
         # 超时设置
         proxy_connect_timeout 60s;
@@ -829,25 +918,30 @@ server {
         proxy_buffer_size 16k;
         proxy_buffers 4 16k;
         
-        # 禁用缓存，确保动态内容实时更新
+        # WebSocket 支持
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # 禁用缓存用于动态内容
         proxy_no_cache 1;
         proxy_cache_bypass 1;
     }
     
-    # 静态资源缓存
-    location ~* \.(jpg|jpeg|png|gif|ico|css|js)$ {
-        proxy_pass $tomcat_url;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        
-        expires 1y;
-        add_header Cache-Control "public, immutable";
+    # 根路径重定向
+    location = / {
+        return 302 $app_path;
     }
     
-    # 健康检查端点
-    location /health {
+    # 隐藏点文件
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+    
+    # 健康检查
+    location /nginx-health {
         access_log off;
         return 200 "healthy\n";
         add_header Content-Type text/plain;
@@ -856,7 +950,86 @@ server {
 EOF
     
     enable_nginx_site "$domain" "$config_file"
+    log "反向代理配置创建完成: $domain"
 }
+
+
+# create_nginx_tomcat_config() {
+#     local domain="$1"
+#     local tomcat_url="$2"
+#     local app_path="$3"
+#     local config_file="/etc/nginx/sites-available/$domain"
+    
+#     log "创建 Tomcat 代理配置: $domain -> $tomcat_url$app_path"
+    
+#     # 确保 Tomcat URL 以 / 结尾
+#     if [[ "$tomcat_url" != */ ]]; then
+#         tomcat_url="$tomcat_url/"
+#     fi
+    
+#     cat > "$config_file" << EOF
+# server {
+#     listen 80;
+#     listen [::]:80;
+    
+#     server_name $domain;
+    
+#     # 安全头
+#     add_header X-Frame-Options "SAMEORIGIN" always;
+#     add_header X-XSS-Protection "1; mode=block" always;
+#     add_header X-Content-Type-Options "nosniff" always;
+    
+#     # Tomcat 应用代理
+#     location $app_path {
+#         proxy_pass $tomcat_url;
+#         proxy_set_header Host \$host;
+#         proxy_set_header X-Real-IP \$remote_addr;
+#         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto \$scheme;
+        
+#         # Tomcat 特定设置
+#         proxy_set_header X-Forwarded-Host \$host;
+#         proxy_set_header X-Forwarded-Server \$host;
+#         proxy_set_header X-Forwarded-Port \$server_port;
+        
+#         # 超时设置
+#         proxy_connect_timeout 60s;
+#         proxy_send_timeout 60s;
+#         proxy_read_timeout 60s;
+        
+#         # 缓冲区设置
+#         proxy_buffering on;
+#         proxy_buffer_size 16k;
+#         proxy_buffers 4 16k;
+        
+#         # 禁用缓存，确保动态内容实时更新
+#         proxy_no_cache 1;
+#         proxy_cache_bypass 1;
+#     }
+    
+#     # 静态资源缓存
+#     location ~* \.(jpg|jpeg|png|gif|ico|css|js)$ {
+#         proxy_pass $tomcat_url;
+#         proxy_set_header Host \$host;
+#         proxy_set_header X-Real-IP \$remote_addr;
+#         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto \$scheme;
+        
+#         expires 1y;
+#         add_header Cache-Control "public, immutable";
+#     }
+    
+#     # 健康检查端点
+#     location /health {
+#         access_log off;
+#         return 200 "healthy\n";
+#         add_header Content-Type text/plain;
+#     }
+# }
+# EOF
+    
+#     enable_nginx_site "$domain" "$config_file"
+# }
 
 enable_nginx_site() {
     local domain="$1"

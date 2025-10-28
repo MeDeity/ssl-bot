@@ -7,3 +7,5 @@ curl -sSL https://raw.githubusercontent.com/MeDeity/ssl-bot/refs/heads/master/in
 # Mothod 2：use wget  
 wget -qO- https://raw.githubusercontent.com/MeDeity/ssl-bot/refs/heads/master/install.sh | bash
 ```
+
+
