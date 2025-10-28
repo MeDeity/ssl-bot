@@ -759,7 +759,7 @@ EOF
 
 create_nginx_php_config() {
     local domain="$1"
-    local config_file="/etc/nginx/sites-available/$domain"
+    local config_file="/etc/nginx/sites-available/$domain.nginx"
     local webroot="/var/www/$domain/html"
     
     log "创建 PHP 网站配置: $config_file"
@@ -812,7 +812,7 @@ create_nginx_proxy_config() {
     local domain="$1"
     local backend_url="$2"
     local app_path="$3"
-    local config_file="/etc/nginx/sites-available/$domain"
+    local config_file="/etc/nginx/sites-available/$domain.nginx"
     
     log "创建反向代理配置: $domain -> $backend_url$app_path"
     
@@ -873,7 +873,7 @@ create_nginx_reverse_proxy_config() {
     local domain="$1"
     local backend_url="$2"
     local app_path="$3"
-    local config_file="/etc/nginx/sites-available/$domain"
+    local config_file="/etc/nginx/sites-available/$domain.nginx"
     
     log "创建反向代理配置: $domain -> $backend_url (路径: $app_path)"
     
@@ -958,7 +958,7 @@ EOF
 #     local domain="$1"
 #     local tomcat_url="$2"
 #     local app_path="$3"
-#     local config_file="/etc/nginx/sites-available/$domain"
+#     local config_file="/etc/nginx/sites-available/$domain.nginx"
     
 #     log "创建 Tomcat 代理配置: $domain -> $tomcat_url$app_path"
     
@@ -1036,8 +1036,8 @@ enable_nginx_site() {
     local config_file="$2"
     
     # 启用站点
-    if [ ! -f "/etc/nginx/sites-enabled/$domain" ]; then
-        ln -s "$config_file" "/etc/nginx/sites-enabled/$domain"
+    if [ ! -f "/etc/nginx/sites-enabled/$domain.nginx" ]; then
+        ln -s "$config_file" "/etc/nginx/sites-enabled/$domain.nginx"
         log "Nginx 站点已启用: $domain"
     else
         log "Nginx 站点已存在: $domain"
@@ -1188,7 +1188,7 @@ EOF
 
 create_nginx_config() {
     local domain="$1"
-    local config_file="/etc/nginx/sites-available/$domain"
+    local config_file="/etc/nginx/sites-available/$domain.nginx"
     
     log "创建 Nginx 配置: $config_file"
     
@@ -1239,8 +1239,8 @@ server {
 EOF
     
     # 启用站点
-    if [ ! -f "/etc/nginx/sites-enabled/$domain" ]; then
-        ln -s "$config_file" "/etc/nginx/sites-enabled/$domain"
+    if [ ! -f "/etc/nginx/sites-enabled/$domain.nginx" ]; then
+        ln -s "$config_file" "/etc/nginx/sites-enabled/$domain.nginx"
         log "Nginx 站点已启用: $domain"
     fi
     
